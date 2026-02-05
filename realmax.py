@@ -86,24 +86,6 @@ def str2bool(v):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
-def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-device", default="cuda")
-
-    # ----------- FPS 数据 ----------------
-    parser.add_argument("--fps_dir",
-                        default="/home_ext/zls-uestc-tmp/MobileIE-main/datasets/uie/uieb/test_fps/input_realmax")
-
-    # ----------- 模型/输出 ----------------
-    parser.add_argument("--model_path", default="uie4.py")  # 你的这段模型代码文件名
-    parser.add_argument("--model_name", default="MobileIEUIENetS")  # 类名=Restormer
-    parser.add_argument("--save_dir", default="./RealMax_Result")  # 保存结果的目录
-    parser.add_argument("--name", default="test",
-                        help="Name for output file and first line of the log")  # 新增的名称参数
-
-    parser.add_argument("--size_multiple", type=int, default=1, help="force H/W to be multiple of N (e.g., 8 or 32)")
-
-    return parser.parse_args()
 
 
 # =====================================================
@@ -1024,80 +1006,3 @@ def ave_fps(model, size_multiple=1, debug=False):
     log(logger, "\n================ AveFPS Sweep Done ================\n")
     return results
 
-
-# =====================================================
-# ======================= 主程序 ======================
-# =====================================================
-def main():
-    opt = get_args()
-
-    if opt.device == "cuda" and torch.cuda.is_available():
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
-
-    # 直接保存在 RealMax_Result 目录下，不再创建子文件夹
-    save_dir = opt.save_dir
-    ensure_dir(save_dir)
-
-    # 根据新的 save_dir 生成日志文件名称，直接保存在 RealMax_Result 目录
-    log_file_name = os.path.join(save_dir, f"RealMax_Result_{opt.name}.txt")
-    log_file = open(log_file_name, "w")
-
-    # 输出 --name 到日志文件的第一行
-    log(log_file, f"Name: {opt.name}")
-
-    # =================== 加载模型 ==================
-    log(log_file, "Loading Model ...")
-    net = load_model(device, opt.model_name, opt.model_path)
-
-    params = count_params(net)
-    log(log_file, f"Model Parameters: {params}")
-
-    # FLOPs（CPU）计算
-    net_cpu = net.to("cpu")
-    cleanup_cuda("after move to cpu")
-    flops_256, _ = compute_flops_cpu(net_cpu, 256, 256)
-    flops_512, _ = compute_flops_cpu(net_cpu, 512, 512)
-
-    log(log_file, f"Model FLOPs (256x256): {flops_256 / 1e9:.4f} GFLOPs")
-    log(log_file, f"Model FLOPs (512x512): {flops_512 / 1e9:.4f} GFLOPs")
-
-    net = net.to(device)
-    cleanup_cuda("after move back gpu")
-
-    # =================== RealMax MSRR ==================
-    # =================== RealMax MSRR (Random Input) ==================
-    log(log_file, "Global Warmup (Random Noise) ...")
-    global_warmup(
-        net, device,
-        fps_sample=None,  # ✅ 关键：None => prepare_fps_input 生成随机噪声图
-        size_wh=(256, 256),
-        min_frames=50,
-        max_seconds=10.0,
-        multiple=opt.size_multiple
-    )
-    log(log_file, "Global Warmup done.")
-
-    realmax_search_MSRR(
-        net=net,
-        device=device,
-        fps_sample=None,  # ✅ 关键：随机噪声输入
-        log_file=log_file,
-        target_fps=30.0,
-        tol_H=8,
-        coarse_loops=20,
-        precision_loops=100,
-        precision_warmup=20,
-        verify_margin=4,
-        size_multiple=opt.size_multiple
-    )
-
-    log(log_file, "Done.")
-    log_file.close()
-
-
-
-
-if __name__ == "__main__":
-    main()
